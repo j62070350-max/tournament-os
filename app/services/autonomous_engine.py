@@ -17,6 +17,8 @@ Interval: 30 seconds (more aggressive than the 60s status scheduler).
 import asyncio
 import logging
 
+import discord
+
 from .autonomous_engine_helpers import _post_registration_panel, _auto_generate_first_round
 
 logger = logging.getLogger(__name__)
@@ -88,7 +90,7 @@ async def _process_tournament(tournament_id: str, organization_id: str) -> None:
         if t.status == TournamentStatus.CHECKIN_OPEN and t.checkin_close_at and now >= t.checkin_close_at:
             logger.info("Autonomous: Closing check-in, starting tournament %s", tournament_id[:8])
             # 1. Process No-Shows & Promote Reserves
-            from app.services.match.no_show_handler import NoShowHandler
+            from app.services.checkin.noshow_handler import NoShowHandler
             async with session.begin():
                 handler = NoShowHandler(session)
                 await handler.process_noshows(organization_id, tournament_id)
@@ -291,6 +293,7 @@ async def _handle_group_stage_playoffs_auto(
                     tournament_id=tournament.id,
                     format=TournamentFormat.SINGLE_ELIMINATION,
                     stage=2,
+                    team_ids=playoff_team_ids,
                 )
                 # Update original bracket phase
                 bracket_obj = await s.get(type(bracket), bracket.id)
@@ -471,34 +474,37 @@ async def _auto_complete_tournament(session, tournament, organization_id: str) -
     from app.database.models.tournament import TournamentStatus
     from app.services.tournament.lifecycle import TournamentLifecycleService
     from app.database.repositories.tournament import TournamentRepository
+    from app.database.session import AsyncSessionLocal
 
+    # Use a fresh session to avoid nested transaction conflicts
     try:
-        async with session.begin():
-            repo = TournamentRepository(session)
-            t = await repo.get_by_id(tournament.id, organization_id)
-            if t and t.can_transition_to(TournamentStatus.COMPLETED):
-                svc = TournamentLifecycleService(session)
-                await svc.transition_status(
-                    tournament_id=tournament.id,
-                    organization_id=organization_id,
-                    new_status=TournamentStatus.COMPLETED,
-                    actor_id="autonomous_engine",
-                    actor_type="system",
-                )
-                logger.info("Autonomous engine: tournament %s auto-completed", tournament.id[:8])
-
-                # Auto-snapshot on completion
-                try:
-                    from app.services.snapshot.snapshot_service import SnapshotService
-                    snap_svc = SnapshotService(session)
-                    await snap_svc.take(
+        async with AsyncSessionLocal() as new_session:
+            async with new_session.begin():
+                repo = TournamentRepository(new_session)
+                t = await repo.get_by_id(tournament.id, organization_id)
+                if t and t.can_transition_to(TournamentStatus.COMPLETED):
+                    svc = TournamentLifecycleService(new_session)
+                    await svc.transition_status(
                         tournament_id=tournament.id,
                         organization_id=organization_id,
-                        trigger="tournament_completed",
-                        label="Final state at tournament completion",
+                        new_status=TournamentStatus.COMPLETED,
+                        actor_id="autonomous_engine",
+                        actor_type="system",
                     )
-                except Exception as snap_exc:
-                    logger.warning("Auto-snapshot on completion failed: %s", snap_exc)
+                    logger.info("Autonomous engine: tournament %s auto-completed", tournament.id[:8])
+
+                    # Auto-snapshot on completion
+                    try:
+                        from app.services.snapshot.snapshot_service import SnapshotService
+                        snap_svc = SnapshotService(new_session)
+                        await snap_svc.take(
+                            tournament_id=tournament.id,
+                            organization_id=organization_id,
+                            trigger="tournament_completed",
+                            label="Final state at tournament completion",
+                        )
+                    except Exception as snap_exc:
+                        logger.warning("Auto-snapshot on completion failed: %s", snap_exc)
 
         # Fire completion notification
         asyncio.create_task(_notify_tournament_completed(tournament.id, organization_id))

@@ -117,18 +117,9 @@ class ScoreModal(discord.ui.Modal, title="Submit Match Score"):
                             tournament_id=self.tournament_id,
                             organization_id=self.organization_id,
                             claiming_team_id=claiming_team_id,
-                            score_team1=(
-                                {"score": my_score}
-                                if claiming_team_id == self.team1_id
-                                else {"score": opp_score}
-                            ),
-                            score_team2=(
-                                {"score": opp_score}
-                                if claiming_team_id == self.team1_id
-                                else {"score": my_score}
-                            ),
-                            winner_id=winner_id,
-                            loser_id=loser_id,
+                            submitted_by_discord_id=str(interaction.user.id),
+                            winner_team_id=winner_id or "",
+                            score={"my_score": my_score, "opponent_score": opp_score},
                         )
 
                         if outcome == "pending":

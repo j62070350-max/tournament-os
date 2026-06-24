@@ -80,8 +80,18 @@ class BracketGenerator:
         seeding_method: str = "seed",
         stage: int = 1,
         settings: dict | None = None,
+        team_ids: list[str] | None = None,
     ) -> Bracket:
-        teams = await self.team_repo.list_checked_in(organization_id, tournament_id)
+        if team_ids:
+            from sqlalchemy import select
+            from app.database.models.team import Team as TeamModel
+            q = select(TeamModel).where(
+                TeamModel.id.in_(team_ids),
+                TeamModel.deleted_at.is_(None),
+            )
+            teams = list((await self.session.execute(q)).scalars().all())
+        else:
+            teams = await self.team_repo.list_checked_in(organization_id, tournament_id)
         if not teams:
             raise ValueError("No checked-in teams to generate bracket for")
 
@@ -163,6 +173,7 @@ class BracketGenerator:
 
     async def _gen_swiss_round1(self, bracket: Bracket, teams: list[Team]) -> None:
         """Swiss round 1 = random pairing; subsequent rounds use standings."""
+        import math as _math
         random.shuffle(teams)
         pairings = [(teams[i].id, teams[i + 1].id if i + 1 < len(teams) else None)
                     for i in range(0, len(teams), 2)]
@@ -170,6 +181,10 @@ class BracketGenerator:
             bracket.organization_id, bracket.tournament_id, bracket.id,
             round=1, pairings=pairings
         )
+        # Swiss total_rounds = ceil(log2(n)) so the engine knows when to stop
+        total_rounds = max(1, _math.ceil(_math.log2(len(teams)))) if len(teams) > 1 else 1
+        bracket.settings = dict(bracket.settings or {})
+        bracket.settings["total_rounds"] = total_rounds
 
     # ── Group Stage ───────────────────────────────────────────────────────────
 

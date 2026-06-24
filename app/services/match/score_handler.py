@@ -194,7 +194,7 @@ class ScoreHandler:
                 match_id=full_match_id,
                 tournament_id=tournament_id,
                 organization_id=organization_id,
-                submitted_by="auto_approval:score_agreement",
+                submitted_by="00000000-0000-0000-0000-000000000001",  # system auto-approval
                 score_team1=score_team1,
                 score_team2=score_team2,
                 winner_id=winner_id,
@@ -214,7 +214,8 @@ class ScoreHandler:
                 organization_id=organization_id,
                 tournament_id=tournament_id,
                 action="match.score_dispute_auto_opened",
-                actor_id="system",
+                actor_id="00000000-0000-0000-0000-000000000001",
+                actor_type="system",
                 target_type="match",
                 target_id=full_match_id,
                 payload={

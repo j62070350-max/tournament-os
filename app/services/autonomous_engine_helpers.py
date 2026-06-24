@@ -83,8 +83,10 @@ async def _auto_generate_first_round(tournament_id: str, organization_id: str) -
             # We just need to find them to trigger channel creation.
             from app.database.models.match import Match
             match_q = select(Match).where(
+                Match.organization_id == organization_id,
                 Match.tournament_id == tournament_id,
-                Match.round == 1
+                Match.round == 1,
+                Match.deleted_at.is_(None),
             )
             result = await session.execute(match_q)
             first_round_matches = result.scalars().all()
@@ -92,5 +94,6 @@ async def _auto_generate_first_round(tournament_id: str, organization_id: str) -
 
         # Create channels and notify players
         if match_ids:
+            from app.services.autonomous_engine import _create_match_channels
             await _create_match_channels(organization_id, tournament_id, match_ids)
             logger.info("Auto-generated first round for tournament %s (%d matches)", tournament_id[:8], len(match_ids))

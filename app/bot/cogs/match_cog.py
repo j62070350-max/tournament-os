@@ -146,6 +146,7 @@ class MatchCog(commands.Cog, name="match"):
             except Exception as exc:
                 logger.error("Visual bracket generation failed: %s", exc)
                 await interaction.followup.send(embed=error_embed("Failed to generate bracket image."), ephemeral=True)
+    @app_commands.command(name="standings", description="View tournament standings")
     @app_commands.describe(tournament_id="Tournament ID")
     async def standings(self, interaction: discord.Interaction, tournament_id: str) -> None:
         await interaction.response.defer()

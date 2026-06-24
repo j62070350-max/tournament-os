@@ -6,6 +6,7 @@ Cross-process sync via PostgreSQL LISTEN/NOTIFY.
 import asyncio
 import logging
 import sys
+import traceback
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -15,9 +16,26 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.config import settings
-from app.events.subscribers import notification_handler, analytics_handler
-from app.web.routes import public, dashboard, health, ai_chat
+try:
+    from app.config import settings
+except Exception as _cfg_err:
+    print(f"FATAL: Cannot load app.config: {_cfg_err}", flush=True)
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    from app.events.subscribers import notification_handler, analytics_handler
+except Exception as _sub_err:
+    print(f"FATAL: Cannot load event subscribers: {_sub_err}", flush=True)
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    from app.web.routes import public, dashboard, health, ai_chat
+except Exception as _routes_err:
+    print(f"FATAL: Cannot load web routes: {_routes_err}", flush=True)
+    traceback.print_exc()
+    sys.exit(1)
 
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
@@ -30,9 +48,18 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     logger.info("Web server starting up...")
-    notification_handler.register_all()
-    analytics_handler.register_all()
-    asyncio.create_task(_pg_listen())
+    try:
+        notification_handler.register_all()
+    except Exception as e:
+        logger.error("Failed to register notification handlers: %s", e)
+    try:
+        analytics_handler.register_all()
+    except Exception as e:
+        logger.error("Failed to register analytics handlers: %s", e)
+    try:
+        asyncio.create_task(_pg_listen())
+    except Exception as e:
+        logger.error("Failed to start PG listener: %s", e)
     logger.info("Web server ready")
     yield
     logger.info("Web server shutting down...")
@@ -47,6 +74,13 @@ def create_app() -> FastAPI:
         redoc_url="/api/redoc" if not settings.is_production else None,
         lifespan=_lifespan,
     )
+
+    # Warn if admin token is the default (insecure)
+    if settings.admin_dashboard_token in ("change_me", "change_me_to_a_long_random_string"):
+        logger.warning(
+            "SECURITY WARNING: ADMIN_DASHBOARD_TOKEN is set to the default value. "
+            "Change it immediately in production!"
+        )
 
     # CORS — allows Discord bot and dashboard clients
     app.add_middleware(

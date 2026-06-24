@@ -19,6 +19,7 @@ async def list_public_tournaments(
 ):
     repo = TournamentRepository(session)
     tournaments = await repo.list_public(limit=limit, offset=offset)
+    total = await repo.count(organization_id=None) if hasattr(repo, 'count_public') else len(tournaments)
     return {
         "tournaments": [
             {
@@ -37,6 +38,7 @@ async def list_public_tournaments(
             for t in tournaments
         ],
         "total": len(tournaments),
+        "has_more": len(tournaments) == limit,
         "limit": limit,
         "offset": offset,
     }
@@ -118,7 +120,21 @@ async def get_public_standings(
     limit: int = 50,
     session: AsyncSession = Depends(get_session),
 ):
-    from app.ai.tools.db_tools import AIDBTools
-    tools = AIDBTools(session, organization_id, tournament_id)
-    standings = await tools.get_standings(limit=limit)
-    return {"standings": standings}
+    from app.database.repositories.standings import StandingsRepository
+    from app.database.models.team import Team
+    repo = StandingsRepository(session)
+    standings = await repo.get_ranked(organization_id, tournament_id, bracket_id=None)
+    result = []
+    for s in standings[:limit]:
+        team = await session.get(Team, s.team_id)
+        result.append({
+            "rank": s.rank,
+            "team_id": s.team_id,
+            "team_name": team.name if team else "Unknown",
+            "wins": s.wins,
+            "losses": s.losses,
+            "draws": s.draws,
+            "points": s.points,
+            "matches_played": s.matches_played,
+        })
+    return {"standings": result, "total": len(result)}

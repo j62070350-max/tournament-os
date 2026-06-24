@@ -15,4 +15,4 @@ COPY web_main.py .
 # PORT is injected by Railway/Render/Fly at runtime; 8000 is the local default.
 EXPOSE ${PORT:-8000}
 
-CMD ["sh", "-c", "alembic upgrade head && python web_main.py"]
+CMD ["sh", "-c", "alembic upgrade head && exec python -u web_main.py 2>&1"]

@@ -1,4 +1,5 @@
 import enum
+from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -96,7 +97,7 @@ class Registration(Base, TimestampMixin, SoftDeleteMixin):
     form_data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     duplicate_flags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     reviewed_by: Mapped[str | None] = mapped_column(UUID(as_uuid=False), ForeignKey("users.id"), nullable=True)
-    reviewed_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
