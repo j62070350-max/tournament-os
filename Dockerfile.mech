@@ -12,4 +12,7 @@ COPY . .
 # Ensure data and knowledge dirs exist
 RUN mkdir -p data knowledge
 
+# Railway injects PORT at runtime; EXPOSE documents the default
+EXPOSE 8080
+
 CMD ["python", "mech_bot_main.py"]
