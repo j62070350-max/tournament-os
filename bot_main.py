@@ -38,7 +38,8 @@ def _start_health_server() -> None:
 # Start IMMEDIATELY when the module loads — before any async code runs.
 # Railway's healthcheck will get a 200 response from this thread while the
 # main thread runs migrations and connects to Discord.
-threading.Thread(target=_start_health_server, daemon=True, name="health-server").start()
+if not os.environ.get("SKIP_HEALTH_SERVER"):
+    threading.Thread(target=_start_health_server, daemon=True, name="health-server").start()
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Force IPv4 at the asyncio event-loop level ────────────────────────────────
@@ -484,3 +485,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

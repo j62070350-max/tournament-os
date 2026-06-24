@@ -34,7 +34,8 @@ def _start_health_server() -> None:
     server.serve_forever()
 
 # Start BEFORE asyncio so Railway health check passes immediately on deploy
-threading.Thread(target=_start_health_server, daemon=True, name="health-server").start()
+if not os.environ.get("SKIP_HEALTH_SERVER"):
+    threading.Thread(target=_start_health_server, daemon=True, name="health-server").start()
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Force IPv4 (same fix as bot_main.py) ─────────────────────────────────────
@@ -168,3 +169,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
