@@ -11,6 +11,35 @@ import logging
 import os
 import socket
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# ── Health-check HTTP server (stdlib, daemon thread) ─────────────────────────
+# Starts BEFORE asyncio.run() so Railway sees a healthy port IMMEDIATELY,
+# even while migrations and Discord login are still in progress.
+# This is the fix for Railway healthcheck timeouts.
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"status":"ok"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass  # suppress access log noise
+
+def _start_health_server() -> None:
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    print(f"[health] Health-check server listening on 0.0.0.0:{port}", flush=True)
+    server.serve_forever()
+
+# Start IMMEDIATELY when the module loads — before any async code runs.
+# Railway's healthcheck will get a 200 response from this thread while the
+# main thread runs migrations and connects to Discord.
+threading.Thread(target=_start_health_server, daemon=True, name="health-server").start()
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Force IPv4 at the asyncio event-loop level ────────────────────────────────
 class _IPv4SelectorEventLoop(asyncio.SelectorEventLoop):
@@ -44,33 +73,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
-
-
-# ── Health-check HTTP server ──────────────────────────────────────────────────
-# Railway requires an HTTP response on PORT to consider the service healthy.
-# This lightweight aiohttp server starts immediately so health checks pass
-# even while migrations and Discord login are still in progress.
-async def run_health_server() -> None:
-    async def health(_: aiohttp.web.Request) -> aiohttp.web.Response:
-        return aiohttp.web.Response(
-            text='{"status":"ok"}',
-            content_type="application/json",
-        )
-
-    app = aiohttp.web.Application()
-    app.router.add_get("/health", health)
-    app.router.add_get("/", health)
-
-    port = int(os.environ.get("PORT", 8080))
-    runner = aiohttp.web.AppRunner(app)
-    await runner.setup()
-    site = aiohttp.web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Health-check server listening on port %d", port)
-    # Keep running forever alongside the bot
-    while True:
-        await asyncio.sleep(3600)
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 # ── Global View Error Handler ─────────────────────────────────────────────────
@@ -441,10 +443,6 @@ async def main() -> None:
     if not settings.database_url:
         logger.critical("DATABASE_URL is not set. Exiting.")
         sys.exit(1)
-
-    # Start health-check server FIRST so Railway sees a healthy port immediately,
-    # even while migrations and Discord login are still in progress.
-    asyncio.create_task(run_health_server())
 
     logger.info("Running database migrations...")
     proc = await asyncio.create_subprocess_exec(
