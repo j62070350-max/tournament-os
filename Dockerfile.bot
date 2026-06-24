@@ -9,8 +9,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
+COPY knowledge/ ./knowledge/
 COPY alembic.ini .
 COPY bot_main.py .
+COPY mech_bot_main.py .
 COPY start.sh .
 RUN chmod +x start.sh
 
@@ -18,3 +20,4 @@ RUN chmod +x start.sh
 EXPOSE 8080
 
 CMD ["bash", "start.sh"]
+
