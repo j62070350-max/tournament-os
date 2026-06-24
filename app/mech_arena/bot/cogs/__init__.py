@@ -1,0 +1,1 @@
+"""Mech Arena bot cogs."""
