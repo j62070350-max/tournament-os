@@ -8,15 +8,13 @@ patch socket.getaddrinfo (which asyncio bypasses when calling its own resolver).
 """
 import asyncio
 import logging
+import os
 import socket
 import sys
 
 
 # ── Force IPv4 at the asyncio event-loop level ────────────────────────────────
-# Must be done BEFORE any network library (aiohttp, asyncpg) is imported so that
-# every coroutine that calls `await loop.getaddrinfo(...)` gets IPv4 results.
 class _IPv4SelectorEventLoop(asyncio.SelectorEventLoop):
-    """SelectorEventLoop that resolves DNS to IPv4 addresses only."""
     async def getaddrinfo(self, host, port, *, family=0, type=0, proto=0, flags=0):
         return await super().getaddrinfo(
             host, port,
@@ -34,6 +32,7 @@ asyncio.set_event_loop_policy(_IPv4EventLoopPolicy())
 # ─────────────────────────────────────────────────────────────────────────────
 
 import aiohttp
+import aiohttp.web
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -48,10 +47,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ── Health-check HTTP server ──────────────────────────────────────────────────
+# Railway requires an HTTP response on PORT to consider the service healthy.
+# This lightweight aiohttp server starts immediately so health checks pass
+# even while migrations and Discord login are still in progress.
+async def run_health_server() -> None:
+    async def health(_: aiohttp.web.Request) -> aiohttp.web.Response:
+        return aiohttp.web.Response(
+            text='{"status":"ok"}',
+            content_type="application/json",
+        )
+
+    app = aiohttp.web.Application()
+    app.router.add_get("/health", health)
+    app.router.add_get("/", health)
+
+    port = int(os.environ.get("PORT", 8080))
+    runner = aiohttp.web.AppRunner(app)
+    await runner.setup()
+    site = aiohttp.web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Health-check server listening on port %d", port)
+    # Keep running forever alongside the bot
+    while True:
+        await asyncio.sleep(3600)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 # ── Global View Error Handler ─────────────────────────────────────────────────
-# discord.py's default View.on_error only prints to stderr and never responds
-# to the interaction, causing Discord to show "interaction failed" to the user.
-# This patch logs the real error AND sends a user-facing error message.
 async def _view_on_error(
     self: discord.ui.View,
     interaction: discord.Interaction,
@@ -78,7 +101,6 @@ discord.ui.View.on_error = _view_on_error
 
 
 # ── Global Modal Error Handler ────────────────────────────────────────────────
-# Same fix for Modals — default on_error only prints to stderr.
 async def _modal_on_error(
     self: discord.ui.Modal,
     interaction: discord.Interaction,
@@ -141,7 +163,6 @@ class TournamentBot(commands.Bot):
         import app.events.subscribers.notification_handler  # noqa: F401
         import app.events.subscribers.analytics_handler  # noqa: F401
 
-        # Wire webhook delivery into the event bus
         from app.services.webhook.webhook_service import register_webhook_subscriber
         register_webhook_subscriber()
 
@@ -279,26 +300,11 @@ class TournamentBot(commands.Bot):
             logger.error("PGNotifyListener failed: %s", e)
 
     async def on_interaction(self, interaction: discord.Interaction) -> None:
-        """Catch-all for component interactions that no registered view handles.
-
-        IMPORTANT: Only intercept interactions whose custom_id has NO ':' separator.
-        Every real registered button custom_id uses ':' (e.g. 'player_hub:register',
-        'manage_t:<id>:<org>', 'cp_status:<id>'). Setup-wizard step buttons use
-        random UUID hex strings with no ':' — those are the only truly unregistered
-        interactions we need to handle here.
-
-        DO NOT sleep-and-check for registered views. discord.py dispatches registered
-        view handlers as asyncio tasks that run AFTER on_interaction, so is_done()
-        will be False even for handled interactions → causes 40060 double-ack errors.
-        """
         if interaction.type != discord.InteractionType.component:
             return
         custom_id = (interaction.data or {}).get("custom_id", "")
-        # If the custom_id contains ':', it belongs to a registered persistent view.
-        # Let discord.py route it — don't touch it here.
         if ":" in custom_id:
             return
-        # Only UUID-style custom_ids (setup wizard steps, etc.) reach here.
         logger.warning("Unhandled component interaction: custom_id=%s user=%s", custom_id, interaction.user)
         try:
             await interaction.response.send_message(
@@ -312,8 +318,6 @@ class TournamentBot(commands.Bot):
     async def on_ready(self) -> None:
         logger.info("Bot ready: %s (ID: %s)", self.user, self.user.id)
 
-        # Register this bot instance with the Discord notification delivery service
-        # so event subscribers can send real DMs and channel messages.
         from app.services.notification.discord_delivery import set_bot
         set_bot(self)
 
@@ -330,7 +334,6 @@ class TournamentBot(commands.Bot):
                 logger.warning("Could not guild-sync to '%s': %s", guild.name, e)
 
     async def on_message(self, message: discord.Message) -> None:
-        """AI chatbot: any message in a channel named *ai-assistant* gets an AI reply."""
         if message.author.bot:
             return
         if not message.guild:
@@ -342,7 +345,6 @@ class TournamentBot(commands.Bot):
             await self.process_commands(message)
             return
 
-        # Don't reply to very short messages or commands
         content = message.content.strip()
         if not content or content.startswith("/") or len(content) < 2:
             await self.process_commands(message)
@@ -440,6 +442,10 @@ async def main() -> None:
     if not settings.database_url:
         logger.critical("DATABASE_URL is not set. Exiting.")
         sys.exit(1)
+
+    # Start health-check server FIRST so Railway sees a healthy port immediately,
+    # even while migrations and Discord login are still in progress.
+    asyncio.create_task(run_health_server())
 
     logger.info("Running database migrations...")
     proc = await asyncio.create_subprocess_exec(
