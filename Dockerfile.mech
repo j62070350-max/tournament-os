@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy project
+COPY . .
+
+# Ensure data and knowledge dirs exist
+RUN mkdir -p data knowledge
+
+CMD ["python", "mech_bot_main.py"]
