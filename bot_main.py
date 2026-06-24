@@ -8,6 +8,7 @@ patch socket.getaddrinfo (which asyncio bypasses when calling its own resolver).
 """
 import asyncio
 import logging
+import os
 import socket
 import sys
 
