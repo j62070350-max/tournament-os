@@ -96,7 +96,7 @@ class MechAICog(commands.Cog, name="mech_ai"):
         logger.info("Mech AI: restored %d channel(s) from disk", len(self._ai_channels))
 
         # Load knowledge base in a thread so it doesn't block the event loop
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._kb_lock:
             await loop.run_in_executor(None, self._kb.load)
         logger.info("Mech AI knowledge base: %s", self._kb.stats)
@@ -277,7 +277,7 @@ class MechAICog(commands.Cog, name="mech_ai"):
     async def reload_mech_knowledge(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._kb_lock:
             await loop.run_in_executor(None, self._kb.reload)
 
@@ -415,7 +415,7 @@ class MechAICog(commands.Cog, name="mech_ai"):
             )
 
         # 1. Retrieve relevant knowledge chunks (run in thread — CPU-bound BM25)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._kb_lock:
             chunks = await loop.run_in_executor(
                 None, lambda: self._kb.search(user_message, top_k=5)
