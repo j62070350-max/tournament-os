@@ -38,7 +38,9 @@ def _fix_url(url: str) -> str:
 database_url = os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url") or "")
 if database_url:
     database_url = _fix_url(database_url)
-    config.set_main_option("sqlalchemy.url", database_url)
+    # Escape '%' as '%%' so configparser's BasicInterpolation doesn't
+    # choke on URL-encoded characters like %20 in the password.
+    config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 
 def run_migrations_offline() -> None:
