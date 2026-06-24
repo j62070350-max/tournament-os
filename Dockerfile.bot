@@ -11,8 +11,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY alembic.ini .
 COPY bot_main.py .
+COPY start.sh .
+RUN chmod +x start.sh
 
 # Railway injects PORT at runtime; EXPOSE documents the default
 EXPOSE 8080
 
-CMD ["python", "bot_main.py"]
+CMD ["bash", "start.sh"]
