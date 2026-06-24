@@ -6,8 +6,36 @@ No database dependency — knowledge is file-based.
 """
 import asyncio
 import logging
+import os
 import socket
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+# ── Health-check HTTP server (stdlib, daemon thread) ─────────────────────────
+# Starts BEFORE asyncio.run() so Railway sees a healthy port immediately,
+# even while migrations and Discord login are still in progress.
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"status":"ok"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass  # suppress access log noise
+
+def _start_health_server() -> None:
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+    print(f"Health-check server listening on 0.0.0.0:{port}", flush=True)
+    server.serve_forever()
+
+# Start BEFORE asyncio so Railway health check passes immediately on deploy
+threading.Thread(target=_start_health_server, daemon=True, name="health-server").start()
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Force IPv4 (same fix as bot_main.py) ─────────────────────────────────────
 class _IPv4SelectorEventLoop(asyncio.SelectorEventLoop):
