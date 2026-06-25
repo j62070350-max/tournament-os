@@ -103,14 +103,14 @@ class MechAICog(commands.Cog, name="mech_ai"):
         self._conversations: dict[int, list[dict]] = {}
         self._kb = KnowledgeBase(mech_settings.knowledge_dir)
         self._kb_lock = asyncio.Lock()
-        self._kb_loaded = False  # lazy-loaded on first query to avoid startup OOM
+        self._kb_loaded = False
 
     async def cog_load(self) -> None:
-        """Called by discord.py when the cog is loaded. Restores channels only.
-        Knowledge base is lazy-loaded on first query to avoid startup OOM."""
-        # Load from env var first (survives Railway restarts)
+        """Load channels, then pre-load the knowledge base at startup.
+        Pre-loading at startup means OOM crashes happen visibly at boot
+        (Railway shows the service as crashed) rather than silently mid-reply."""
+        # Restore registered channels
         self._ai_channels.update(_load_env_channels())
-        # Then also load from the JSON file (picks up /create-mech-ai-channel registrations)
         for guild_channels in _load_channels().values():
             for ch_id in guild_channels:
                 try:
@@ -118,18 +118,30 @@ class MechAICog(commands.Cog, name="mech_ai"):
                 except ValueError:
                     pass
         logger.info("Mech AI: restored %d channel(s) total (env var + disk)", len(self._ai_channels))
-        logger.info("Mech AI knowledge base will load on first query (lazy).")
+
+        # Pre-load knowledge base now — if it OOMs it crashes at startup,
+        # not silently mid-reply (which makes the bot appear broken).
+        loop = asyncio.get_running_loop()
+        async with self._kb_lock:
+            try:
+                await loop.run_in_executor(None, self._kb.load)
+                self._kb_loaded = True
+                logger.info("Mech AI: knowledge base loaded at startup: %s", self._kb.stats)
+            except MemoryError as exc:
+                logger.critical("Mech AI: OOM loading knowledge base — bot will answer without KB context: %s", exc)
+            except Exception as exc:
+                logger.error("Mech AI: failed to load knowledge base at startup: %s", exc)
 
     async def _ensure_kb_loaded(self) -> None:
-        """Load the knowledge base on first use. Safe to call concurrently."""
+        """No-op if already loaded; safety net in case cog_load was skipped."""
         if self._kb_loaded:
             return
         async with self._kb_lock:
-            if not self._kb_loaded:  # double-checked locking
+            if not self._kb_loaded:
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, self._kb.load)
                 self._kb_loaded = True
-                logger.info("Mech AI knowledge base loaded (lazy): %s", self._kb.stats)
+                logger.info("Mech AI: knowledge base loaded (fallback): %s", self._kb.stats)
 
     # ── /create-mech-ai-channel ───────────────────────────────────────────────
 
