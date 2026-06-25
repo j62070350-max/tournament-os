@@ -383,6 +383,28 @@ class MechAICog(commands.Cog, name="mech_ai"):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    async def _safe_send(
+        self,
+        message: discord.Message,
+        text: str | None = None,
+        embed: discord.Embed | None = None,
+    ) -> None:
+        """Send a reply, falling back to channel.send() if reply() fails."""
+        try:
+            await message.reply(text, embed=embed, mention_author=False)
+        except Exception as reply_err:
+            logger.warning("message.reply() failed (%s), falling back to channel.send()", reply_err)
+            try:
+                mention = message.author.mention
+                if embed is not None:
+                    await message.channel.send(f"{mention}", embed=embed)
+                else:
+                    await message.channel.send(f"{mention} {text}")
+            except Exception as send_err:
+                logger.error("channel.send() also failed: %s", send_err)
+
     # ── on_message — RAG + AI reply ───────────────────────────────────────────
 
     @commands.Cog.listener()
@@ -398,8 +420,15 @@ class MechAICog(commands.Cog, name="mech_ai"):
         if not content or len(content) < 2:
             return
 
-        async with message.channel.typing():
-            try:
+        logger.info(
+            "Mech AI: processing message from %s in #%s: %.80r",
+            message.author.display_name,
+            message.channel.name,
+            content,
+        )
+
+        try:
+            async with message.channel.typing():
                 reply = await asyncio.wait_for(
                     self._rag_reply(
                         channel_id=message.channel.id,
@@ -408,32 +437,25 @@ class MechAICog(commands.Cog, name="mech_ai"):
                     ),
                     timeout=50,
                 )
-                embed = discord.Embed(
-                    description=reply[:4000],
-                    color=discord.Color.from_rgb(0, 180, 255),
-                )
-                embed.set_author(
-                    name="🤖 Mech Arena AI",
-                    icon_url=(
-                        self.bot.user.display_avatar.url if self.bot.user else None
-                    ),
-                )
-                embed.set_footer(
-                    text="Answers grounded in knowledge base • /mech-ai-stats"
-                )
-                await message.reply(embed=embed, mention_author=False)
+        except asyncio.TimeoutError:
+            logger.warning("Mech AI: RAG pipeline timed out for channel %s", message.channel.id)
+            await self._safe_send(message, "⏱️ I'm thinking too hard — please try again in a moment.")
+            return
+        except Exception as e:
+            logger.error("Mech AI on_message RAG error: %s", e, exc_info=True)
+            await self._safe_send(message, f"❌ Something went wrong (`{type(e).__name__}: {e}`). Please try again.")
+            return
 
-            except asyncio.TimeoutError:
-                await message.reply(
-                    "⏱️ I'm thinking too hard — please try again in a moment.",
-                    mention_author=False,
-                )
-            except Exception as e:
-                logger.error("Mech AI on_message error: %s", e, exc_info=True)
-                await message.reply(
-                    "❌ Something went wrong. Please try again.",
-                    mention_author=False,
-                )
+        embed = discord.Embed(
+            description=(reply or "I'm not sure — please try rephrasing.")[:4000],
+            color=discord.Color.from_rgb(0, 180, 255),
+        )
+        embed.set_author(
+            name="🤖 Mech Arena AI",
+            icon_url=(self.bot.user.display_avatar.url if self.bot.user else None),
+        )
+        embed.set_footer(text="Answers grounded in knowledge base • /mech-ai-stats")
+        await self._safe_send(message, embed=embed)
 
     async def _rag_reply(
         self, channel_id: int, username: str, user_message: str
