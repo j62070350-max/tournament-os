@@ -383,27 +383,16 @@ class MechAICog(commands.Cog, name="mech_ai"):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # ── helpers ───────────────────────────────────────────────────────────────
+    # ── !mech test — quick send check ─────────────────────────────────────────
 
-    async def _safe_send(
-        self,
-        message: discord.Message,
-        text: str | None = None,
-        embed: discord.Embed | None = None,
-    ) -> None:
-        """Send a reply, falling back to channel.send() if reply() fails."""
-        try:
-            await message.reply(text, embed=embed, mention_author=False)
-        except Exception as reply_err:
-            logger.warning("message.reply() failed (%s), falling back to channel.send()", reply_err)
-            try:
-                mention = message.author.mention
-                if embed is not None:
-                    await message.channel.send(f"{mention}", embed=embed)
-                else:
-                    await message.channel.send(f"{mention} {text}")
-            except Exception as send_err:
-                logger.error("channel.send() also failed: %s", send_err)
+    @commands.command(name="test")
+    async def mech_test(self, ctx: commands.Context) -> None:
+        """Type '!mech test' in any channel to verify the bot can send messages."""
+        await ctx.send(
+            f"✅ Bot is alive and can send messages in this channel!\n"
+            f"Registered AI channels: {len(self._ai_channels)}\n"
+            f"Groq key set: {'✓' if mech_settings.groq_api_key else '✗ MISSING — set GROQ_API_KEY in Railway'}"
+        )
 
     # ── on_message — RAG + AI reply ───────────────────────────────────────────
 
@@ -421,15 +410,21 @@ class MechAICog(commands.Cog, name="mech_ai"):
             return
 
         logger.info(
-            "Mech AI: processing message from %s in #%s: %.80r",
+            "Mech AI: message from %s in #%s (channel id=%s registered=%s): %.80r",
             message.author.display_name,
-            message.channel.name,
+            getattr(message.channel, "name", "?"),
+            message.channel.id,
+            message.channel.id in self._ai_channels,
             content,
         )
 
+        # Use channel.send() — never message.reply() — so we don't need
+        # READ_MESSAGE_HISTORY permission. Mention the user so they see the reply.
+        mention = message.author.mention
+
         try:
             async with message.channel.typing():
-                reply = await asyncio.wait_for(
+                reply_text = await asyncio.wait_for(
                     self._rag_reply(
                         channel_id=message.channel.id,
                         username=message.author.display_name,
@@ -438,24 +433,34 @@ class MechAICog(commands.Cog, name="mech_ai"):
                     timeout=50,
                 )
         except asyncio.TimeoutError:
-            logger.warning("Mech AI: RAG pipeline timed out for channel %s", message.channel.id)
-            await self._safe_send(message, "⏱️ I'm thinking too hard — please try again in a moment.")
+            logger.warning("Mech AI: timed out for channel %s", message.channel.id)
+            await message.channel.send(f"{mention} ⏱️ Taking too long — please try again.")
             return
         except Exception as e:
-            logger.error("Mech AI on_message RAG error: %s", e, exc_info=True)
-            await self._safe_send(message, f"❌ Something went wrong (`{type(e).__name__}: {e}`). Please try again.")
+            logger.error("Mech AI RAG error: %s", e, exc_info=True)
+            await message.channel.send(
+                f"{mention} ❌ Error: `{type(e).__name__}: {e}`\n"
+                "Check Railway logs for details."
+            )
             return
 
-        embed = discord.Embed(
-            description=(reply or "I'm not sure — please try rephrasing.")[:4000],
-            color=discord.Color.from_rgb(0, 180, 255),
-        )
-        embed.set_author(
-            name="🤖 Mech Arena AI",
-            icon_url=(self.bot.user.display_avatar.url if self.bot.user else None),
-        )
-        embed.set_footer(text="Answers grounded in knowledge base • /mech-ai-stats")
-        await self._safe_send(message, embed=embed)
+        text = (reply_text or "I'm not sure — please try rephrasing.")[:4000]
+
+        try:
+            embed = discord.Embed(
+                description=text,
+                color=discord.Color.from_rgb(0, 180, 255),
+            )
+            embed.set_author(
+                name="🤖 Mech Arena AI",
+                icon_url=(self.bot.user.display_avatar.url if self.bot.user else None),
+            )
+            embed.set_footer(text="Answers grounded in knowledge base • /mech-ai-stats")
+            await message.channel.send(mention, embed=embed)
+        except Exception as embed_err:
+            logger.warning("Embed send failed (%s), sending plain text", embed_err)
+            # Last resort: plain text, no embed
+            await message.channel.send(f"{mention}\n{text[:2000]}")
 
     async def _rag_reply(
         self, channel_id: int, username: str, user_message: str
