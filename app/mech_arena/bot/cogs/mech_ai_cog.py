@@ -14,6 +14,7 @@ Message handling:
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 import discord
@@ -28,6 +29,25 @@ logger = logging.getLogger(__name__)
 # Persistent storage for AI channel registrations
 _DATA_DIR = Path("data")
 _CHANNELS_FILE = _DATA_DIR / "mech_channels.json"
+
+
+def _load_env_channels() -> set[int]:
+    """
+    Read channel IDs from MECH_AI_CHANNEL_IDS env var (comma-separated).
+    This survives Railway restarts because env vars are always present.
+    Example: MECH_AI_CHANNEL_IDS=123456789,987654321
+    """
+    raw = os.environ.get("MECH_AI_CHANNEL_IDS", "").strip()
+    if not raw:
+        return set()
+    result: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            result.add(int(part))
+    if result:
+        logger.info("Mech AI: loaded %d channel(s) from MECH_AI_CHANNEL_IDS env var", len(result))
+    return result
 
 # Maximum conversation history to keep per channel (number of messages)
 _MAX_HISTORY = 20
@@ -88,13 +108,16 @@ class MechAICog(commands.Cog, name="mech_ai"):
     async def cog_load(self) -> None:
         """Called by discord.py when the cog is loaded. Restores channels only.
         Knowledge base is lazy-loaded on first query to avoid startup OOM."""
+        # Load from env var first (survives Railway restarts)
+        self._ai_channels.update(_load_env_channels())
+        # Then also load from the JSON file (picks up /create-mech-ai-channel registrations)
         for guild_channels in _load_channels().values():
             for ch_id in guild_channels:
                 try:
                     self._ai_channels.add(int(ch_id))
                 except ValueError:
                     pass
-        logger.info("Mech AI: restored %d channel(s) from disk", len(self._ai_channels))
+        logger.info("Mech AI: restored %d channel(s) total (env var + disk)", len(self._ai_channels))
         logger.info("Mech AI knowledge base will load on first query (lazy).")
 
     async def _ensure_kb_loaded(self) -> None:
