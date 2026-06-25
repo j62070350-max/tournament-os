@@ -71,13 +71,14 @@ class MechArenaBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.members = True
+        # members intent disabled: syncing member lists costs ~100MB RAM per bot startup
         connector = aiohttp.TCPConnector(family=socket.AF_INET)
         super().__init__(
             command_prefix="!mech ",
             intents=intents,
             description="Mech Arena AI Assistant",
             connector=connector,
+            max_messages=100,  # limit message cache (default 1000)
         )
 
     async def setup_hook(self) -> None:
@@ -169,4 +170,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 

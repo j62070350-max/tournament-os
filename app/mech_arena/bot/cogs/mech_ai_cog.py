@@ -83,10 +83,11 @@ class MechAICog(commands.Cog, name="mech_ai"):
         self._conversations: dict[int, list[dict]] = {}
         self._kb = KnowledgeBase(mech_settings.knowledge_dir)
         self._kb_lock = asyncio.Lock()
+        self._kb_loaded = False  # lazy-loaded on first query to avoid startup OOM
 
     async def cog_load(self) -> None:
-        """Called by discord.py when the cog is loaded. Loads KB + persisted channels."""
-        # Restore registered channels
+        """Called by discord.py when the cog is loaded. Restores channels only.
+        Knowledge base is lazy-loaded on first query to avoid startup OOM."""
         for guild_channels in _load_channels().values():
             for ch_id in guild_channels:
                 try:
@@ -94,12 +95,18 @@ class MechAICog(commands.Cog, name="mech_ai"):
                 except ValueError:
                     pass
         logger.info("Mech AI: restored %d channel(s) from disk", len(self._ai_channels))
+        logger.info("Mech AI knowledge base will load on first query (lazy).")
 
-        # Load knowledge base in a thread so it doesn't block the event loop
-        loop = asyncio.get_running_loop()
+    async def _ensure_kb_loaded(self) -> None:
+        """Load the knowledge base on first use. Safe to call concurrently."""
+        if self._kb_loaded:
+            return
         async with self._kb_lock:
-            await loop.run_in_executor(None, self._kb.load)
-        logger.info("Mech AI knowledge base: %s", self._kb.stats)
+            if not self._kb_loaded:  # double-checked locking
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, self._kb.load)
+                self._kb_loaded = True
+                logger.info("Mech AI knowledge base loaded (lazy): %s", self._kb.stats)
 
     # ── /create-mech-ai-channel ───────────────────────────────────────────────
 
@@ -280,6 +287,7 @@ class MechAICog(commands.Cog, name="mech_ai"):
         loop = asyncio.get_running_loop()
         async with self._kb_lock:
             await loop.run_in_executor(None, self._kb.reload)
+            self._kb_loaded = True
 
         stats = self._kb.stats
         embed = discord.Embed(title="✅ Knowledge Base Reloaded", color=discord.Color.green())
@@ -413,6 +421,9 @@ class MechAICog(commands.Cog, name="mech_ai"):
                 "❌ AI is not configured (`GROQ_API_KEY` missing). "
                 "Please ask an admin to set this environment variable."
             )
+
+        # Lazy-load knowledge base on first query (avoids startup OOM)
+        await self._ensure_kb_loaded()
 
         # 1. Retrieve relevant knowledge chunks (run in thread — CPU-bound BM25)
         loop = asyncio.get_running_loop()
