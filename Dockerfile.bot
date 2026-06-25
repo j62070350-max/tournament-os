@@ -13,11 +13,9 @@ COPY knowledge/ ./knowledge/
 COPY alembic.ini .
 COPY bot_main.py .
 COPY mech_bot_main.py .
-COPY start.sh .
-RUN chmod +x start.sh
+COPY run_all.py .
 
 # Railway injects PORT at runtime; EXPOSE documents the default
 EXPOSE 8080
 
-CMD ["bash", "start.sh"]
-
+CMD ["python", "run_all.py"]
