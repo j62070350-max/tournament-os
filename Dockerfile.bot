@@ -1,12 +1,14 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
+# gcc + libpq-dev needed for asyncpg C extension
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libpq-dev && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install bot-only requirements (no FastAPI/uvicorn/Pillow = ~60MB less RAM)
+COPY requirements.bot.txt .
+RUN pip install --no-cache-dir -r requirements.bot.txt
 
 COPY app/ ./app/
 COPY knowledge/ ./knowledge/
@@ -15,7 +17,12 @@ COPY bot_main.py .
 COPY mech_bot_main.py .
 COPY run_all.py .
 
-# Railway injects PORT at runtime; EXPOSE documents the default
 EXPOSE 8080
+
+# Python memory optimisations:
+#   PYTHONOPTIMIZE=1  — strips docstrings from loaded modules (~5 MB)
+#   MALLOC_TRIM_THRESHOLD_=100000 — returns freed pages to OS faster
+ENV PYTHONOPTIMIZE=1 \
+    MALLOC_TRIM_THRESHOLD_=100000
 
 CMD ["python", "run_all.py"]
