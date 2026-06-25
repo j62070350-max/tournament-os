@@ -8,6 +8,7 @@ BM25 parameters:
     k1 = 1.5  (term-frequency saturation)
     b  = 0.75 (document-length normalisation)
 """
+import gc
 import logging
 import math
 import re
@@ -151,3 +152,8 @@ class KnowledgeBase:
             "BM25 index built: %d chunks, %d unique terms, avg_len=%.1f",
             N, len(self._index), avg_len,
         )
+
+        # Free the large temporary structures used during index construction
+        # and force GC to release that memory back to the OS immediately.
+        del tf_per_doc, doc_lengths, df
+        gc.collect()
