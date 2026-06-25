@@ -2,13 +2,14 @@
 set -e
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Single Railway service that runs BOTH Discord bots.
-# One health-check server handles PORT; both bots skip their own via env var.
-# If either bot process exits (crash/restart), the whole container exits so
-# Railway restarts it automatically.
+# Single Railway service running BOTH Discord bots.
+# One health-check server owns PORT.
+# Mech bot starts 30 s after the tournament bot so their startup memory
+# peaks (migrations + Discord login vs knowledge-base load) don't overlap.
+# If either bot exits, the whole container exits → Railway auto-restarts.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Start a single health-check server on PORT
+# Start health-check server first so Railway sees a live port immediately
 python3 -c "
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -26,20 +27,24 @@ print(f'[health] listening on 0.0.0.0:{port}', flush=True)
 HTTPServer(('0.0.0.0', port), H).serve_forever()
 " &
 HEALTH_PID=$!
-
-# Give health server a moment to bind before Railway checks it
+echo "[startup] health server PID=$HEALTH_PID"
 sleep 1
 
-# Start both bots with SKIP_HEALTH_SERVER=1 so they don't fight over PORT
+# Start tournament bot first (heavier: runs DB migrations + Discord login)
 SKIP_HEALTH_SERVER=1 python3 bot_main.py &
 BOT_PID=$!
 echo "[startup] Tournament Bot PID=$BOT_PID"
 
+# Wait 30 s before starting mech bot so startup memory peaks don't overlap
+echo "[startup] Waiting 30 s before starting Mech Arena Bot..."
+sleep 30
+
+# Start mech bot (loads BM25 knowledge base into memory)
 SKIP_HEALTH_SERVER=1 python3 mech_bot_main.py &
 MECH_PID=$!
 echo "[startup] Mech Arena Bot PID=$MECH_PID"
 
-# Wait for any child to exit — if a bot crashes, kill everything so Railway restarts
+# If either bot exits for any reason, kill everything → Railway restarts
 wait -n $BOT_PID $MECH_PID
 echo "[startup] A bot process exited — shutting down so Railway can restart"
 kill $BOT_PID $MECH_PID $HEALTH_PID 2>/dev/null

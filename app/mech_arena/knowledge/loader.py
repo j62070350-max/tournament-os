@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 600      # characters per chunk
 CHUNK_OVERLAP = 100   # overlap between consecutive chunks
 
+# Skip files larger than this — they are raw data tables (DPS spreadsheets, etc.)
+# that generate thousands of useless BM25 chunks and spike memory on load.
+MAX_FILE_BYTES = 40_000   # 40 KB
+
 
 @dataclass
 class KnowledgeChunk:
@@ -78,13 +82,24 @@ def _iter_markdown_files(base_dir: Path) -> Iterator[Path]:
 def load_knowledge_chunks(base_dir: Path) -> list[KnowledgeChunk]:
     """
     Walk base_dir, read every .md file, chunk its content.
+    Files over MAX_FILE_BYTES are skipped (raw data tables — bad for RAG).
     Returns a flat list of KnowledgeChunk objects ready for indexing.
     """
     chunks: list[KnowledgeChunk] = []
     file_count = 0
+    skipped = 0
 
     for md_path in _iter_markdown_files(base_dir):
         try:
+            file_size = md_path.stat().st_size
+            if file_size > MAX_FILE_BYTES:
+                logger.info(
+                    "Skipping large file (%.1f KB > %.0f KB limit): %s",
+                    file_size / 1024, MAX_FILE_BYTES / 1024, md_path.name,
+                )
+                skipped += 1
+                continue
+
             content = md_path.read_text(encoding="utf-8", errors="replace").strip()
             if not content:
                 continue
@@ -106,7 +121,7 @@ def load_knowledge_chunks(base_dir: Path) -> list[KnowledgeChunk]:
             logger.error("Failed to load %s: %s", md_path, e)
 
     logger.info(
-        "Knowledge loader: %d files → %d chunks (dir=%s)",
-        file_count, len(chunks), base_dir,
+        "Knowledge loader: %d files → %d chunks, %d large files skipped (dir=%s)",
+        file_count, len(chunks), skipped, base_dir,
     )
     return chunks
