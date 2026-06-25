@@ -17,6 +17,12 @@ CHUNK_OVERLAP = 100   # overlap between consecutive chunks
 # that generate thousands of useless BM25 chunks and spike memory on load.
 MAX_FILE_BYTES = 40_000   # 40 KB
 
+# Skip entire directories whose names are in this set.
+# "database/" contains raw stat tables (DPS calcs, upgrade costs, etc.)
+# that are too large for conversational RAG and cause OOM on low-RAM hosts.
+# The structured data lives in mechs/, weapons/, pilots/ as readable prose.
+EXCLUDE_DIRS: frozenset[str] = frozenset({"database"})
+
 
 @dataclass
 class KnowledgeChunk:
@@ -68,12 +74,13 @@ def _chunk_text(text: str) -> list[str]:
 
 
 def _iter_markdown_files(base_dir: Path) -> Iterator[Path]:
-    """Recursively yield all .md files under base_dir, sorted for determinism."""
+    """Recursively yield all .md files under base_dir, skipping excluded dirs."""
     if not base_dir.exists():
         logger.warning("Knowledge directory does not exist: %s", base_dir)
         return
     for root, dirs, files in os.walk(base_dir):
-        dirs.sort()
+        # Prune excluded directories in-place so os.walk won't descend into them
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS)
         for fname in sorted(files):
             if fname.lower().endswith(".md"):
                 yield Path(root) / fname
@@ -82,7 +89,7 @@ def _iter_markdown_files(base_dir: Path) -> Iterator[Path]:
 def load_knowledge_chunks(base_dir: Path) -> list[KnowledgeChunk]:
     """
     Walk base_dir, read every .md file, chunk its content.
-    Files over MAX_FILE_BYTES are skipped (raw data tables — bad for RAG).
+    Directories in EXCLUDE_DIRS and files over MAX_FILE_BYTES are skipped.
     Returns a flat list of KnowledgeChunk objects ready for indexing.
     """
     chunks: list[KnowledgeChunk] = []
@@ -121,7 +128,7 @@ def load_knowledge_chunks(base_dir: Path) -> list[KnowledgeChunk]:
             logger.error("Failed to load %s: %s", md_path, e)
 
     logger.info(
-        "Knowledge loader: %d files → %d chunks, %d large files skipped (dir=%s)",
-        file_count, len(chunks), skipped, base_dir,
+        "Knowledge loader: %d files → %d chunks, %d files skipped, excluded dirs=%s (base=%s)",
+        file_count, len(chunks), skipped, sorted(EXCLUDE_DIRS), base_dir,
     )
     return chunks
